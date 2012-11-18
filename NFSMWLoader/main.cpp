@@ -13,15 +13,27 @@ extern "C" int CDECL main(void)
 
     lpErrorMessage = DoWork();
 
-    if (!lpErrorMessage)
-        return 0;
+    DWORD dwResult = 0;
 
-    return HandleError(lpErrorMessage);
+    if (lpErrorMessage)
+        dwResult = HandleError(lpErrorMessage);
+
+    ExitProcess(dwResult);
+    return dwResult;
 }
 
 LPCTSTR DoWork(void)
 {
     HWND hDesktopWindow = GetDesktopWindow();
+
+    // Get screen resolution
+    RECT rcWindowRect;
+    BOOL bResult = GetWindowRect(hDesktopWindow, &rcWindowRect);
+    if (!bResult)
+        return TEXT("GetWindowRect failed!");
+
+    DWORD dwScreenWidth = rcWindowRect.right;
+    DWORD dwScreenHeight = rcWindowRect.bottom;
 
     // Start speed.exe
     int result = (int)ShellExecute(hDesktopWindow, TEXT("open"), TEXT("speed.exe"), NULL, NULL, SW_SHOWNORMAL);
@@ -36,14 +48,15 @@ LPCTSTR DoWork(void)
     do
     {
         // Sleep some time to allow speed.exe create the window
-        Sleep(dwMaxSleepTime / dwMaxRetries);
+        if (dwRetry)
+            Sleep(dwMaxSleepTime / dwMaxRetries);
 
         // Find the window
         hWindow = FindWindow(TEXT("GameFrame"), NULL);
     }
     while (!hWindow && ++dwRetry < dwMaxRetries);
 
-    if (hWindow == NULL)
+    if (!hWindow)
         return TEXT("FindWindow failed!");
 
     DWORD dwProcessId = 0;
@@ -63,15 +76,6 @@ LPCTSTR DoWork(void)
     HANDLE hProcess = OpenProcess(dwDesiredAccess, FALSE, dwProcessId);
     if (!hProcess)
         return TEXT("OpenProcess failed!");
-
-    // Get screen resolution
-    RECT rcWindowRect;
-    BOOL bResult = GetWindowRect(hWindow, &rcWindowRect);
-    if (!bResult)
-        return TEXT("GetWindowRect failed!");
-
-    DWORD dwScreenWidth = rcWindowRect.right;
-    DWORD dwScreenHeight = rcWindowRect.bottom;
 
     LPVOID lpPatchLocation;
     LPCVOID lpPatchData;
@@ -102,14 +106,26 @@ LPCTSTR DoWork(void)
     if (lpPatchResult)
         return lpPatchResult;
 
-    // Patch loaded flag
-    BYTE bFlag = 1;
-    lpPatchLocation = (LPVOID)0x982C39;
-    lpPatchData = &bFlag;
-    dwPatchSize = sizeof(bFlag);
-    lpPatchResult = PatchLocation(hProcess, lpPatchLocation, lpPatchData, dwPatchSize);
-    if (lpPatchResult)
-        return lpPatchResult;
+    DWORD dwClientWidth;
+    do
+    {
+        // Patch loaded flag
+        BYTE bFlag = 1;
+        lpPatchLocation = (LPVOID)0x982C39;
+        lpPatchData = &bFlag;
+        dwPatchSize = sizeof(bFlag);
+        lpPatchResult = PatchLocation(hProcess, lpPatchLocation, lpPatchData, dwPatchSize);
+        if (lpPatchResult)
+            return lpPatchResult;
+
+        lpPatchLocation = (LPVOID)0x982BE4;
+        bResult = ReadProcessMemory(hProcess, lpPatchLocation, &dwClientWidth, sizeof(DWORD), NULL);
+        if (!bResult)
+            break;
+
+        Sleep(500);
+    }
+    while (dwClientWidth != dwScreenWidth);
 
     CloseHandle(hProcess);
 
